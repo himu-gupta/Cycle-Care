@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -52,7 +51,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -641,21 +639,9 @@ private fun ReliefScreen() {
         "NSAID allergy or asthma reaction",
     )
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var selectionChanges by remember { mutableIntStateOf(0) }
-    val listState = rememberLazyListState()
-    val safetyResultIndex = 4 + contraindications.size
-    val updateSelection: (Set<String>) -> Unit = { updated ->
-        selected = updated
-        selectionChanges += 1
-    }
-
-    LaunchedEffect(selectionChanges) {
-        if (selectionChanges > 0) listState.animateScrollToItem(safetyResultIndex)
-    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        state = listState,
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -676,14 +662,14 @@ private fun ReliefScreen() {
         items(contraindications) { item ->
             Row(
                 Modifier.fillMaxWidth().clickable {
-                    updateSelection(if (item in selected) selected - item else selected + item)
+                    selected = if (item in selected) selected - item else selected + item
                 },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Checkbox(
                     checked = item in selected,
                     onCheckedChange = { checked ->
-                        updateSelection(if (checked) selected + item else selected - item)
+                        selected = if (checked) selected + item else selected - item
                     },
                 )
                 Text(item)
