@@ -4,6 +4,7 @@ import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,8 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
@@ -41,13 +44,18 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,12 +79,15 @@ import com.himu.cyclecare.domain.CycleSettings
 import com.himu.cyclecare.domain.DailySymptomLog
 import com.himu.cyclecare.domain.FlowLevel
 import com.himu.cyclecare.domain.PeriodEntry
+import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 private val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy")
 private val shortFormatter = DateTimeFormatter.ofPattern("EEE, d MMM")
+private val monthFormatter = DateTimeFormatter.ofPattern("MMMM yyyy")
 
 private data class Destination(val route: String, val label: String, val icon: ImageVector)
 
@@ -106,14 +117,42 @@ fun CycleCareApp(
     }
 
     val navController = rememberNavController()
+    var logDate by remember { mutableStateOf(LocalDate.now()) }
+    var logReturnRoute by remember { mutableStateOf("home") }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val backStack by navController.currentBackStackEntryAsState()
+    val openLog: (LocalDate) -> Unit = { date ->
+        logDate = date
+        logReturnRoute = backStack?.destination?.route?.takeIf { it != "log" } ?: "home"
+        navController.navigate("log") {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+    val finishLogAction: (String) -> Unit = { message ->
+        if (logReturnRoute != "log") {
+            navController.navigate(logReturnRoute) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        scope.launch { snackbarHostState.showSnackbar(message) }
+    }
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar {
                 destinations.forEach { destination ->
                     NavigationBarItem(
                         selected = backStack?.destination?.route == destination.route,
                         onClick = {
+                            if (destination.route == "log") {
+                                logDate = LocalDate.now()
+                                logReturnRoute = "home"
+                            }
                             navController.navigate(destination.route) {
                                 popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                 launchSingleTop = true
@@ -132,14 +171,28 @@ fun CycleCareApp(
             startDestination = "home",
             modifier = Modifier.padding(padding),
         ) {
-            composable("home") { DashboardScreen(state) }
-            composable("calendar") { CalendarScreen(state.prediction) }
+            composable("home") { DashboardScreen(state, onCheckIn = { openLog(LocalDate.now()) }) }
+            composable("calendar") { CalendarScreen(state, onSelectDate = openLog) }
             composable("log") {
                 LogScreen(
                     state = state,
-                    onSaveLog = viewModel::saveLog,
-                    onAddPeriod = viewModel::addPeriod,
-                    onDeletePeriod = viewModel::deletePeriod,
+                    initialDate = logDate,
+                    onSaveLog = { log ->
+                        viewModel.saveLog(log) { finishLogAction("Check-in saved") }
+                    },
+                    onAddPeriod = { period ->
+                        viewModel.addPeriod(period) { finishLogAction("Period day 1 recorded") }
+                    },
+                    onEditPeriod = { period ->
+                        viewModel.addPeriod(period) {
+                            scope.launch { snackbarHostState.showSnackbar("Period date updated") }
+                        }
+                    },
+                    onDeletePeriod = { period ->
+                        viewModel.deletePeriod(period) {
+                            scope.launch { snackbarHostState.showSnackbar("Period entry deleted") }
+                        }
+                    },
                 )
             }
             composable("relief") { ReliefScreen() }
@@ -189,7 +242,7 @@ private fun OnboardingScreen(settings: CycleSettings, onSave: (LocalDate, Int) -
 }
 
 @Composable
-private fun DashboardScreen(state: CycleUiState) {
+private fun DashboardScreen(state: CycleUiState, onCheckIn: () -> Unit) {
     val prediction = state.prediction
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -203,15 +256,33 @@ private fun DashboardScreen(state: CycleUiState) {
         if (prediction != null) {
             val today = LocalDate.now()
             val days = ChronoUnit.DAYS.between(today, prediction.nextPeriod)
+            val overdueDays = prediction.daysOverdue(today)
             item {
                 HeroCard(
-                    title = if (days == 0L) "Period expected today" else "$days days until your period",
-                    subtitle = "Estimated ${prediction.nextPeriod.format(dateFormatter)}",
+                    title = when {
+                        overdueDays > 0 -> "Period may be $overdueDays ${if (overdueDays == 1L) "day" else "days"} late"
+                        days == 0L -> "Period expected today"
+                        else -> "$days days until your period"
+                    },
+                    subtitle = if (overdueDays > 0) {
+                        "Expected ${prediction.nextPeriod.format(dateFormatter)} · Add a new start date when it arrives"
+                    } else {
+                        "Estimated ${prediction.nextPeriod.format(dateFormatter)}"
+                    },
                 )
             }
-            item {
-                val phase = prediction.phaseOn(today)
-                PhaseCard(phase, prediction.isPremenstrual(today))
+            if (overdueDays == 0L) {
+                item {
+                    val phase = prediction.phaseOn(today)
+                    PhaseCard(phase, prediction.isPremenstrual(today))
+                }
+            } else {
+                item {
+                    InfoCard(
+                        "Awaiting your update",
+                        "Cycle timing can vary. Cycle Care will not assume another period occurred until you record it.",
+                    )
+                }
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -228,8 +299,21 @@ private fun DashboardScreen(state: CycleUiState) {
             }
         }
         val todayLog = state.logs.firstOrNull { it.date == LocalDate.now() }
-        if (todayLog != null) {
-            item { InfoCard("Today's check-in", "Pain ${todayLog.pain}/10 · ${todayLog.flow.name.lowercase()} flow") }
+        item {
+            Card {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("Today's check-in", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        todayLog?.let { "Pain ${it.pain}/10 · ${it.flow.name.lowercase()} flow" }
+                            ?: "Track flow, pain, symptoms, medicine, or a quick note.",
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = onCheckIn) {
+                        Text(if (todayLog == null) "Check in now" else "Edit today's check-in")
+                    }
+                }
+            }
         }
         val recentLengths = state.periods.map { it.startDate }.distinct().sorted().zipWithNext { first, second ->
             ChronoUnit.DAYS.between(first, second)
@@ -253,69 +337,218 @@ private fun DashboardScreen(state: CycleUiState) {
 }
 
 @Composable
-private fun CalendarScreen(prediction: CyclePrediction?) {
-    if (prediction == null) return
-    val days = remember(prediction) { (0L..41L).map { LocalDate.now().plusDays(it) } }
+private fun CalendarScreen(state: CycleUiState, onSelectDate: (LocalDate) -> Unit) {
+    val prediction = state.prediction ?: return
+    var visibleMonth by remember { mutableStateOf(YearMonth.now()) }
+    val firstDay = visibleMonth.atDay(1)
+    val gridStart = firstDay.minusDays((firstDay.dayOfWeek.value - 1).toLong())
+    val lastDay = visibleMonth.atEndOfMonth()
+    val gridEnd = lastDay.plusDays((7 - lastDay.dayOfWeek.value).toLong())
+    val dayCount = ChronoUnit.DAYS.between(gridStart, gridEnd) + 1
+    val days = remember(visibleMonth) { (0L until dayCount).map(gridStart::plusDays) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Text("Cycle calendar", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("Upcoming dates are estimates", color = MaterialTheme.colorScheme.secondary)
+            Text("Tap any day to view or edit its check-in", color = MaterialTheme.colorScheme.secondary)
         }
-        items(days) { date ->
-            val phase = prediction.phaseOn(dateForPredictionCycle(date, prediction))
-            val premenstrual = date in prediction.premenstrualWindow
-            Card(colors = CardDefaults.cardColors(containerColor = phaseColor(phase).copy(alpha = 0.16f))) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(12.dp).background(phaseColor(phase), CircleShape))
-                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text(date.format(shortFormatter), fontWeight = FontWeight.SemiBold)
-                        Text(phase.label + if (premenstrual) " · Premenstrual window" else "")
-                    }
-                    if (date == prediction.nextPeriod || date == prediction.ovulationDate) Text("Estimated", style = MaterialTheme.typography.labelSmall)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                IconButton(onClick = { visibleMonth = visibleMonth.minusMonths(1) }) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous month")
+                }
+                Text(visibleMonth.format(monthFormatter), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                IconButton(onClick = { visibleMonth = visibleMonth.plusMonths(1) }) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next month")
                 }
             }
         }
         item {
-            Text("The fertile window and ovulation estimate cannot confirm fertility and are not birth control.", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth()) {
+                listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun").forEach { label ->
+                    Text(
+                        label,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+            }
+        }
+        items(days.chunked(7)) { week ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                week.forEach { date ->
+                    CalendarDay(
+                        date = date,
+                        inVisibleMonth = YearMonth.from(date) == visibleMonth,
+                        isRecordedPeriod = state.periods.any { period ->
+                            date >= period.startDate && date <= (period.endDate ?: period.startDate)
+                        },
+                        isEstimatedPeriod = isEstimatedPeriodDate(date, prediction),
+                        hasLog = state.logs.any { it.date == date },
+                        onClick = { onSelectDate(date) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        item {
+            Card {
+                Column(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("What the calendar means", fontWeight = FontWeight.Bold)
+                    CalendarLegend(
+                        title = "Recorded period",
+                        detail = "Pink day background",
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    )
+                    CalendarLegend(
+                        title = "Estimated period",
+                        detail = "Beige day background",
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.22f),
+                    )
+                    CalendarLegend(
+                        title = "Daily check-in saved",
+                        detail = "Small dark dot inside the day",
+                        color = MaterialTheme.colorScheme.secondary,
+                        isDot = true,
+                    )
+                }
+            }
+        }
+        item {
+            Text(
+                if (prediction.isOverdue(LocalDate.now())) {
+                    "The expected date has passed, so later cycles are not projected until a new period is recorded."
+                } else {
+                    "Future period dates are estimates. Ovulation estimates cannot confirm fertility and are not birth control."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
         }
     }
 }
 
-private fun dateForPredictionCycle(date: LocalDate, prediction: CyclePrediction): LocalDate {
-    if (date < prediction.nextPeriod) return date
-    val offset = ChronoUnit.DAYS.between(prediction.nextPeriod, date) % prediction.cycleLength
-    return prediction.cycleStart.plusDays(offset)
+@Composable
+private fun CalendarDay(
+    date: LocalDate,
+    inVisibleMonth: Boolean,
+    isRecordedPeriod: Boolean,
+    isEstimatedPeriod: Boolean,
+    hasLog: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val containerColor = when {
+        isRecordedPeriod -> MaterialTheme.colorScheme.primaryContainer
+        isEstimatedPeriod -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.22f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    }
+    Card(
+        modifier = modifier.aspectRatio(0.82f).clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+    ) {
+        Box(Modifier.fillMaxSize().padding(6.dp)) {
+            Text(
+                date.dayOfMonth.toString(),
+                color = when {
+                    date == LocalDate.now() -> MaterialTheme.colorScheme.primary
+                    inVisibleMonth -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+                },
+                fontWeight = if (date == LocalDate.now()) FontWeight.Bold else FontWeight.Normal,
+            )
+            if (hasLog) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .size(6.dp)
+                        .background(MaterialTheme.colorScheme.secondary, CircleShape),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarLegend(title: String, detail: String, color: Color, isDot: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(
+            Modifier
+                .size(if (isDot) 8.dp else 22.dp)
+                .background(color, if (isDot) CircleShape else CardDefaults.shape),
+        )
+        Column {
+            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+        }
+    }
+}
+
+private fun isEstimatedPeriodDate(date: LocalDate, prediction: CyclePrediction): Boolean {
+    if (date < prediction.nextPeriod) return false
+    val offset = ChronoUnit.DAYS.between(prediction.nextPeriod, date)
+    val cycleIndex = offset / prediction.cycleLength
+    if (prediction.isOverdue(LocalDate.now()) && cycleIndex > 0) return false
+    val estimatedStart = prediction.nextPeriod.plusDays(cycleIndex * prediction.cycleLength)
+    return date < estimatedStart.plusDays(prediction.periodLength.toLong())
 }
 
 @Composable
 private fun LogScreen(
     state: CycleUiState,
+    initialDate: LocalDate,
     onSaveLog: (DailySymptomLog) -> Unit,
     onAddPeriod: (PeriodEntry) -> Unit,
+    onEditPeriod: (PeriodEntry) -> Unit,
     onDeletePeriod: (PeriodEntry) -> Unit,
 ) {
-    var date by remember { mutableStateOf(LocalDate.now()) }
+    var date by remember { mutableStateOf(initialDate) }
     var pain by remember { mutableStateOf(0f) }
     var flow by remember { mutableStateOf(FlowLevel.NONE) }
     var symptoms by remember { mutableStateOf(setOf<String>()) }
     var medicine by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     val symptomOptions = listOf("Cramps", "Headache", "Bloating", "Fatigue", "Mood changes", "Breast tenderness")
+    val existingLog = state.logs.firstOrNull { it.date == date }
+
+    LaunchedEffect(initialDate) {
+        date = initialDate
+    }
+    LaunchedEffect(date, existingLog) {
+        pain = existingLog?.pain?.toFloat() ?: 0f
+        flow = existingLog?.flow ?: FlowLevel.NONE
+        symptoms = existingLog?.symptoms ?: emptySet()
+        medicine = existingLog?.medicine.orEmpty()
+        notes = existingLog?.notes.orEmpty()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { Text("Daily log", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) }
-        item { DateButton(date) { date = it } }
+        item {
+            Text(if (existingLog == null) "Daily check-in" else "Edit check-in", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(
+                if (existingLog == null) "A quick record is enough. Add only what is useful today."
+                else "Your saved details are ready to review or update.",
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        }
+        item { DateButton(date) { selected -> date = selected } }
         item {
             Text("Pain: ${pain.toInt()}/10", fontWeight = FontWeight.SemiBold)
             Slider(value = pain, onValueChange = { pain = it }, valueRange = 0f..10f, steps = 9)
@@ -349,9 +582,11 @@ private fun LogScreen(
         item { OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 2) }
         item {
             Button(
-                onClick = { onSaveLog(DailySymptomLog(date, flow, pain.toInt(), symptoms, medicine.trim(), notes.trim())) },
+                onClick = {
+                    onSaveLog(DailySymptomLog(date, flow, pain.toInt(), symptoms, medicine.trim(), notes.trim()))
+                },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save check-in") }
+            ) { Text(if (existingLog == null) "Save check-in" else "Update check-in") }
         }
         item {
             OutlinedButton(
@@ -376,7 +611,7 @@ private fun LogScreen(
                             context,
                             { _, year, month, day ->
                                 val revisedStart = LocalDate.of(year, month + 1, day)
-                                onAddPeriod(
+                                onEditPeriod(
                                     period.copy(
                                         startDate = revisedStart,
                                         endDate = revisedStart.plusDays(state.settings.periodLength.toLong() - 1),
@@ -406,8 +641,21 @@ private fun ReliefScreen() {
         "NSAID allergy or asthma reaction",
     )
     var selected by remember { mutableStateOf(setOf<String>()) }
+    var selectionChanges by remember { mutableIntStateOf(0) }
+    val listState = rememberLazyListState()
+    val safetyResultIndex = 4 + contraindications.size
+    val updateSelection: (Set<String>) -> Unit = { updated ->
+        selected = updated
+        selectionChanges += 1
+    }
+
+    LaunchedEffect(selectionChanges) {
+        if (selectionChanges > 0) listState.animateScrollToItem(safetyResultIndex)
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -426,19 +674,32 @@ private fun ReliefScreen() {
             Text("Select anything that applies before viewing OTC options.")
         }
         items(contraindications) { item ->
-            Row(Modifier.fillMaxWidth().clickable { selected = if (item in selected) selected - item else selected + item }, verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = item in selected, onCheckedChange = { checked -> selected = if (checked) selected + item else selected - item })
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    updateSelection(if (item in selected) selected - item else selected + item)
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = item in selected,
+                    onCheckedChange = { checked ->
+                        updateSelection(if (checked) selected + item else selected - item)
+                    },
+                )
                 Text(item)
             }
         }
         item {
             if (selected.isEmpty()) {
                 InfoCard(
-                    "Over-the-counter options",
+                    "Safety result: OTC options available",
                     "Ibuprofen or naproxen may help period cramps. Acetaminophen/paracetamol is another pain-relief option. Follow your local package label or ask a pharmacist; do not combine ibuprofen with naproxen, and check combination products to avoid duplicate acetaminophen/paracetamol.",
                 )
             } else {
-                AlertCard("Ask a pharmacist or clinician first", "One or more selected conditions can change which pain medicines are safe. Do not rely on generalized app guidance.")
+                AlertCard(
+                    "Safety result: ask a pharmacist or clinician first",
+                    "${selected.size} ${if (selected.size == 1) "selected condition can" else "selected conditions can"} change which pain medicines are safe. Do not rely on generalized app guidance.",
+                )
             }
         }
         item {

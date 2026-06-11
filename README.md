@@ -12,9 +12,9 @@ Cycle Care is a private, local-first Android menstrual cycle tracker built with 
 
 ## Features
 
-- Starts with a 28-day estimate and adapts to the median of recent completed cycles.
-- Shows menstrual, follicular, estimated ovulation, luteal, and premenstrual dates.
-- Records bleeding, pain, symptoms, medicine use, and notes locally with Room.
+- Starts with a 28-day estimate, adapts to recent cycles, and flags overdue periods without inventing unrecorded cycles.
+- Shows recorded and estimated period days in a navigable month calendar with check-in history.
+- Records and edits bleeding, pain, symptoms, medicine use, and notes locally with Room.
 - Schedules period and optional phase reminders with WorkManager.
 - Provides adult-focused home-care guidance and safety-gated OTC medicine information.
 - Stores settings with DataStore and requires no account or cloud service.

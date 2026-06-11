@@ -1,6 +1,7 @@
 package com.himu.cyclecare.domain
 
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 data class PeriodEntry(
     val id: Long = 0,
@@ -57,4 +58,9 @@ data class CyclePrediction(
     }
 
     fun isPremenstrual(date: LocalDate): Boolean = date in premenstrualWindow
+
+    fun daysOverdue(date: LocalDate): Long =
+        ChronoUnit.DAYS.between(nextPeriod, date).coerceAtLeast(0)
+
+    fun isOverdue(date: LocalDate): Boolean = date.isAfter(nextPeriod)
 }

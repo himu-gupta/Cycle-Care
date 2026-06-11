@@ -14,7 +14,6 @@ class CyclePredictionEngineTest {
         val prediction = CyclePredictionEngine.predict(
             periods = listOf(PeriodEntry(startDate = start)),
             settings = CycleSettings(),
-            today = LocalDate.of(2026, 5, 10),
         )
 
         assertNotNull(prediction)
@@ -33,7 +32,6 @@ class CyclePredictionEngineTest {
                 PeriodEntry(startDate = LocalDate.of(2026, 3, 26)),
             ),
             settings = CycleSettings(),
-            today = LocalDate.of(2026, 3, 27),
         )!!
 
         assertEquals(28, prediction.cycleLength)
@@ -45,7 +43,6 @@ class CyclePredictionEngineTest {
         val prediction = CyclePredictionEngine.predict(
             periods = listOf(PeriodEntry(startDate = LocalDate.of(2026, 5, 1))),
             settings = CycleSettings(periodLength = 5),
-            today = LocalDate.of(2026, 5, 2),
         )!!
 
         assertEquals(CyclePhase.MENSTRUAL, prediction.phaseOn(LocalDate.of(2026, 5, 5)))
@@ -57,14 +54,15 @@ class CyclePredictionEngineTest {
     }
 
     @Test
-    fun advancesPredictionWhenExpectedDateHasPassed() {
+    fun keepsExpectedDateWhenPeriodIsOverdue() {
         val prediction = CyclePredictionEngine.predict(
             periods = listOf(PeriodEntry(startDate = LocalDate.of(2026, 1, 1))),
             settings = CycleSettings(),
-            today = LocalDate.of(2026, 2, 1),
         )!!
 
-        assertEquals(LocalDate.of(2026, 2, 26), prediction.nextPeriod)
+        assertEquals(LocalDate.of(2026, 1, 29), prediction.nextPeriod)
+        assertEquals(3, prediction.daysOverdue(LocalDate.of(2026, 2, 1)))
+        assertTrue(prediction.isOverdue(LocalDate.of(2026, 2, 1)))
     }
 
     @Test
@@ -72,12 +70,10 @@ class CyclePredictionEngineTest {
         val leapPrediction = CyclePredictionEngine.predict(
             periods = listOf(PeriodEntry(startDate = LocalDate.of(2024, 2, 10))),
             settings = CycleSettings(),
-            today = LocalDate.of(2024, 2, 11),
         )!!
         val yearPrediction = CyclePredictionEngine.predict(
             periods = listOf(PeriodEntry(startDate = LocalDate.of(2025, 12, 20))),
             settings = CycleSettings(),
-            today = LocalDate.of(2025, 12, 21),
         )!!
 
         assertEquals(LocalDate.of(2024, 3, 9), leapPrediction.nextPeriod)

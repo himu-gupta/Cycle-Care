@@ -33,9 +33,10 @@ class CycleViewModel(application: Application) : AndroidViewModel(application) {
         CycleUiState(periods, logs, settings, CyclePredictionEngine.predict(periods, settings))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CycleUiState())
 
-    fun addPeriod(entry: PeriodEntry) = viewModelScope.launch {
+    fun addPeriod(entry: PeriodEntry, onComplete: () -> Unit = {}) = viewModelScope.launch {
         repository.addPeriod(entry)
         reschedule()
+        onComplete()
     }
 
     fun completeOnboarding(startDate: LocalDate, periodLength: Int) = viewModelScope.launch {
@@ -50,12 +51,16 @@ class CycleViewModel(application: Application) : AndroidViewModel(application) {
         reschedule()
     }
 
-    fun deletePeriod(entry: PeriodEntry) = viewModelScope.launch {
+    fun deletePeriod(entry: PeriodEntry, onComplete: () -> Unit = {}) = viewModelScope.launch {
         repository.deletePeriod(entry)
         reschedule()
+        onComplete()
     }
 
-    fun saveLog(log: DailySymptomLog) = viewModelScope.launch { repository.saveLog(log) }
+    fun saveLog(log: DailySymptomLog, onComplete: () -> Unit = {}) = viewModelScope.launch {
+        repository.saveLog(log)
+        onComplete()
+    }
 
     fun updateSettings(settings: CycleSettings) = viewModelScope.launch {
         repository.updateSettings(settings)

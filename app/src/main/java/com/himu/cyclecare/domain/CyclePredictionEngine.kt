@@ -1,13 +1,11 @@
 package com.himu.cyclecare.domain
 
-import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 object CyclePredictionEngine {
     fun predict(
         periods: List<PeriodEntry>,
         settings: CycleSettings,
-        today: LocalDate = LocalDate.now(),
     ): CyclePrediction? {
         val starts = periods.map { it.startDate }.distinct().sorted()
         if (starts.isEmpty()) return null
@@ -18,12 +16,8 @@ object CyclePredictionEngine {
         val learned = recentLengths.size >= 2
         val length = if (learned) median(recentLengths) else settings.cycleLength.coerceIn(21, 45)
 
-        var cycleStart = starts.last()
-        var nextPeriod = cycleStart.plusDays(length.toLong())
-        while (nextPeriod <= today) {
-            cycleStart = nextPeriod
-            nextPeriod = cycleStart.plusDays(length.toLong())
-        }
+        val cycleStart = starts.last()
+        val nextPeriod = cycleStart.plusDays(length.toLong())
         val ovulation = nextPeriod.minusDays(14)
         return CyclePrediction(
             cycleStart = cycleStart,
